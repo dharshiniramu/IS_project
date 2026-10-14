@@ -85,6 +85,12 @@ class Evidence(Base):
     stego_artifacts: Mapped[list["StegoArtifact"]] = relationship(
         back_populates="evidence", cascade="all, delete-orphan"
     )
+    text_stego_artifacts: Mapped[list["TextStegoArtifact"]] = relationship(
+        back_populates="evidence", cascade="all, delete-orphan"
+    )
+    audio_stego_artifacts: Mapped[list["AudioStegoArtifact"]] = relationship(
+        back_populates="evidence", cascade="all, delete-orphan"
+    )
 
 
 class EvidenceShare(Base):
@@ -119,6 +125,40 @@ class StegoArtifact(Base):
         nullable=False,
     )
     evidence: Mapped[Evidence] = relationship(back_populates="stego_artifacts")
+
+
+class TextStegoArtifact(Base):
+    __tablename__ = "text_stego_artifacts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    evidence_id: Mapped[int] = mapped_column(ForeignKey("evidence.id"), nullable=False, index=True)
+    stored_filename: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    storage_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    sha256_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    message_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    evidence: Mapped[Evidence] = relationship(back_populates="text_stego_artifacts")
+
+
+class AudioStegoArtifact(Base):
+    __tablename__ = "audio_stego_artifacts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    evidence_id: Mapped[int] = mapped_column(ForeignKey("evidence.id"), nullable=False, index=True)
+    stored_filename: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    storage_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    sha256_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    message_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    evidence: Mapped[Evidence] = relationship(back_populates="audio_stego_artifacts")
 
 
 class PrivacyRecord(Base):

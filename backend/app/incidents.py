@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -14,18 +15,30 @@ from .database import get_db
 from .deps import get_current_user, require_role
 from .models import (
     AuditLog,
+    AudioStegoArtifact,
     Evidence,
     EvidenceShare,
     Incident,
     IncidentStatus,
     PrivacyRecord,
     StegoArtifact,
+    TextStegoArtifact,
     User,
     UserRole,
 )
 from .privacy import mask_pii
-from .schemas import EvidenceShareResponse, IncidentResponse, StegoArtifactResponse
-from .visual_cryptography import create_visual_shares
+from .schemas import (
+    EvidenceShareResponse,
+    AudioStegoArtifactResponse,
+    IncidentResponse,
+    StegoArtifactResponse,
+    TextStegoArtifactResponse,
+)
+from .text_steganography import embed_text as embed_text_in_carrier
+from .text_steganography import extract_text as extract_text_from_carrier
+from .audio_steganography import embed_text as embed_text_in_audio
+from .audio_steganography import extract_text as extract_text_from_audio
+from .visual_cryptography import create_visual_shares, reconstruct_visual_shares
 from .steganography import embed_text, extract_text
 
 router = APIRouter(prefix="/api/incidents", tags=["incidents"])
@@ -38,6 +51,32 @@ allowed_media_types = {
 }
 max_file_size = 10 * 1024 * 1024
 image_media_types = {"image/png", "image/jpeg"}
+
+
+def authorized_incident_evidence(
+    incident_code: str,
+    evidence_id: int,
+    current_user: User,
+    db: Session,
+) -> Evidence:
+    incident = db.query(Incident).filter(Incident.incident_code == incident_code).first()
+    if not incident:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found")
+    if current_user.role is not UserRole.admin and incident.reporter_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You cannot access this incident")
+    evidence = db.query(Evidence).filter(
+        Evidence.id == evidence_id, Evidence.incident_id == incident.id
+    ).first()
+    if not evidence:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Evidence not found")
+    return evidence
+
+
+def private_file_response(path: str, filename: str) -> FileResponse:
+    resolved = Path(path).resolve()
+    if not resolved.is_file() or storage_root.resolve() not in resolved.parents:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Protected file not found")
+    return FileResponse(resolved, media_type="application/octet-stream", filename=filename)
 
 
 def create_incident_code() -> str:
@@ -179,6 +218,138 @@ def get_incident(
     if current_user.role is not UserRole.admin and incident.reporter_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You cannot access this incident")
     return incident
+
+
+@router.get("/{incident_code}/evidence/{evidence_id}/download")
+def download_evidence(
+    incident_code: str,
+    evidence_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    evidence = authorized_incident_evidence(incident_code, evidence_id, current_user, db)
+    db.add(AuditLog(
+        actor_id=current_user.id,
+        action="evidence_downloaded",
+        target_type="evidence",
+        target_id=str(evidence.id),
+        outcome="success",
+    ))
+    db.commit()
+    return private_file_response(evidence.storage_path, evidence.original_filename)
+
+
+@router.get("/{incident_code}/evidence/{evidence_id}/preview")
+def preview_evidence(
+    incident_code: str,
+    evidence_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    evidence = authorized_incident_evidence(incident_code, evidence_id, current_user, db)
+    path = Path(evidence.storage_path).resolve()
+    if evidence.media_type not in image_media_types:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Only image evidence can be previewed in the browser.",
+        )
+    if not path.is_file() or storage_root.resolve() not in path.parents:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Protected file not found")
+    return FileResponse(path, media_type=evidence.media_type, filename=evidence.original_filename)
+
+
+@router.get("/{incident_code}/evidence/{evidence_id}/shares/{share_id}/download")
+def download_visual_share(
+    incident_code: str,
+    evidence_id: int,
+    share_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    evidence = authorized_incident_evidence(incident_code, evidence_id, current_user, db)
+    share = db.query(EvidenceShare).filter(
+        EvidenceShare.id == share_id, EvidenceShare.evidence_id == evidence.id
+    ).first()
+    if not share:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Visual share not found")
+    db.add(AuditLog(
+        actor_id=current_user.id,
+        action="visual_share_downloaded",
+        target_type="evidence_share",
+        target_id=str(share.id),
+        outcome="success",
+    ))
+    db.commit()
+    return private_file_response(share.storage_path, share.stored_filename)
+
+
+@router.post("/{incident_code}/evidence/{evidence_id}/visual-shares/reconstruct")
+def reconstruct_shares(
+    incident_code: str,
+    evidence_id: int,
+    share_one_id: int,
+    share_two_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    evidence = authorized_incident_evidence(incident_code, evidence_id, current_user, db)
+    shares = db.query(EvidenceShare).filter(
+        EvidenceShare.evidence_id == evidence.id,
+        EvidenceShare.id.in_([share_one_id, share_two_id]),
+    ).all()
+    if len(shares) != 2 or share_one_id == share_two_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Two different visual shares are required")
+    try:
+        share_by_id = {share.id: share for share in shares}
+        reconstructed = reconstruct_visual_shares(
+            Path(share_by_id[share_one_id].storage_path).read_bytes(),
+            Path(share_by_id[share_two_id].storage_path).read_bytes(),
+        )
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unable to reconstruct visual shares") from exc
+    output_path = Path(evidence.storage_path).parent / "shares" / f"{Path(evidence.stored_filename).stem}.reconstructed.png"
+    output_path.write_bytes(reconstructed)
+    db.add(AuditLog(
+        actor_id=current_user.id,
+        action="visual_shares_reconstructed",
+        target_type="evidence",
+        target_id=str(evidence.id),
+        outcome="success",
+    ))
+    db.commit()
+    return private_file_response(str(output_path), output_path.name)
+
+
+@router.get("/{incident_code}/evidence/{evidence_id}/artifacts/{artifact_type}/{artifact_id}/download")
+def download_protected_artifact(
+    incident_code: str,
+    evidence_id: int,
+    artifact_type: str,
+    artifact_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    evidence = authorized_incident_evidence(incident_code, evidence_id, current_user, db)
+    artifact_models = {
+        "image": StegoArtifact,
+        "text": TextStegoArtifact,
+        "audio": AudioStegoArtifact,
+    }
+    model = artifact_models.get(artifact_type)
+    if model is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported artifact type")
+    artifact = db.query(model).filter(model.id == artifact_id, model.evidence_id == evidence.id).first()
+    if not artifact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Protected artifact not found")
+    db.add(AuditLog(
+        actor_id=current_user.id,
+        action="protected_artifact_downloaded",
+        target_type="evidence",
+        target_id=str(evidence.id),
+        outcome="success",
+    ))
+    db.commit()
+    return private_file_response(artifact.storage_path, artifact.stored_filename)
 
 
 @router.post(
@@ -332,6 +503,200 @@ def extract_hidden_text(
         AuditLog(
             actor_id=current_user.id,
             action="hidden_message_extracted",
+            target_type="evidence",
+            target_id=str(artifact.evidence_id),
+            outcome="success",
+        )
+    )
+    db.commit()
+    return {"message": message}
+
+
+@router.post(
+    "/{incident_code}/evidence/{evidence_id}/text-steganography",
+    response_model=TextStegoArtifactResponse,
+)
+def hide_text_in_text(
+    incident_code: str,
+    evidence_id: int,
+    secret: str = Form(..., min_length=1, max_length=5000),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TextStegoArtifact:
+    incident = db.query(Incident).filter(Incident.incident_code == incident_code).first()
+    if not incident:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found")
+    if current_user.role is not UserRole.admin and incident.reporter_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You cannot access this incident")
+    evidence = db.query(Evidence).filter(
+        Evidence.id == evidence_id, Evidence.incident_id == incident.id
+    ).first()
+    if not evidence:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Evidence not found")
+    if evidence.media_type != "text/plain" or not evidence.original_filename.lower().endswith(".txt"):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Text steganography supports plain text evidence only.",
+        )
+    try:
+        carrier, message_size = embed_text_in_carrier(
+            Path(evidence.storage_path).read_text(encoding="utf-8"),
+            secret,
+        )
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    artifact_directory = Path(evidence.storage_path).parent / "text-steganography"
+    artifact_directory.mkdir(parents=True, exist_ok=True)
+    stored_filename = f"{Path(evidence.stored_filename).stem}.stego.txt"
+    artifact_path = artifact_directory / stored_filename
+    artifact_bytes = carrier.encode("utf-8")
+    artifact_path.write_bytes(artifact_bytes)
+    artifact = TextStegoArtifact(
+        evidence_id=evidence.id,
+        stored_filename=stored_filename,
+        storage_path=str(artifact_path),
+        sha256_hash=hashlib.sha256(artifact_bytes).hexdigest(),
+        message_size_bytes=message_size,
+    )
+    db.add(artifact)
+    db.add(
+        AuditLog(
+            actor_id=current_user.id,
+            action="text_message_embedded",
+            target_type="evidence",
+            target_id=str(evidence.id),
+            outcome="success",
+        )
+    )
+    db.commit()
+    db.refresh(artifact)
+    return artifact
+
+
+@router.get(
+    "/{incident_code}/text-steganography/{artifact_id}/message",
+    response_model=dict[str, str],
+)
+def extract_hidden_text_from_text(
+    incident_code: str,
+    artifact_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    incident = db.query(Incident).filter(Incident.incident_code == incident_code).first()
+    if not incident:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found")
+    if current_user.role is not UserRole.admin and incident.reporter_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You cannot access this incident")
+    artifact = db.query(TextStegoArtifact).join(Evidence).filter(
+        TextStegoArtifact.id == artifact_id, Evidence.incident_id == incident.id
+    ).first()
+    if not artifact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Text steganography artifact not found")
+    try:
+        message = extract_text_from_carrier(Path(artifact.storage_path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    db.add(
+        AuditLog(
+            actor_id=current_user.id,
+            action="text_hidden_message_extracted",
+            target_type="evidence",
+            target_id=str(artifact.evidence_id),
+            outcome="success",
+        )
+    )
+    db.commit()
+    return {"message": message}
+
+
+@router.post(
+    "/{incident_code}/evidence/{evidence_id}/audio-steganography",
+    response_model=AudioStegoArtifactResponse,
+)
+def hide_text_in_audio(
+    incident_code: str,
+    evidence_id: int,
+    secret: str = Form(..., min_length=1, max_length=5000),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> AudioStegoArtifact:
+    incident = db.query(Incident).filter(Incident.incident_code == incident_code).first()
+    if not incident:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found")
+    if current_user.role is not UserRole.admin and incident.reporter_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You cannot access this incident")
+    evidence = db.query(Evidence).filter(
+        Evidence.id == evidence_id, Evidence.incident_id == incident.id
+    ).first()
+    if not evidence:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Evidence not found")
+    if evidence.media_type not in {"audio/wav", "audio/x-wav"} or not evidence.original_filename.lower().endswith(".wav"):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Audio steganography supports WAV evidence only.",
+        )
+    try:
+        carrier_bytes, message_size = embed_text_in_audio(Path(evidence.storage_path).read_bytes(), secret)
+    except (OSError, ValueError, EOFError) as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    artifact_directory = Path(evidence.storage_path).parent / "audio-steganography"
+    artifact_directory.mkdir(parents=True, exist_ok=True)
+    stored_filename = f"{Path(evidence.stored_filename).stem}.stego.wav"
+    artifact_path = artifact_directory / stored_filename
+    artifact_path.write_bytes(carrier_bytes)
+    artifact = AudioStegoArtifact(
+        evidence_id=evidence.id,
+        stored_filename=stored_filename,
+        storage_path=str(artifact_path),
+        sha256_hash=hashlib.sha256(carrier_bytes).hexdigest(),
+        message_size_bytes=message_size,
+    )
+    db.add(artifact)
+    db.add(
+        AuditLog(
+            actor_id=current_user.id,
+            action="audio_message_embedded",
+            target_type="evidence",
+            target_id=str(evidence.id),
+            outcome="success",
+        )
+    )
+    db.commit()
+    db.refresh(artifact)
+    return artifact
+
+
+@router.get(
+    "/{incident_code}/audio-steganography/{artifact_id}/message",
+    response_model=dict[str, str],
+)
+def extract_hidden_text_from_audio(
+    incident_code: str,
+    artifact_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    incident = db.query(Incident).filter(Incident.incident_code == incident_code).first()
+    if not incident:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found")
+    if current_user.role is not UserRole.admin and incident.reporter_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You cannot access this incident")
+    artifact = db.query(AudioStegoArtifact).join(Evidence).filter(
+        AudioStegoArtifact.id == artifact_id, Evidence.incident_id == incident.id
+    ).first()
+    if not artifact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio steganography artifact not found")
+    try:
+        message = extract_text_from_audio(Path(artifact.storage_path).read_bytes())
+    except (OSError, ValueError, EOFError) as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    db.add(
+        AuditLog(
+            actor_id=current_user.id,
+            action="audio_hidden_message_extracted",
             target_type="evidence",
             target_id=str(artifact.evidence_id),
             outcome="success",

@@ -4,9 +4,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import auth, incidents
 from .config import get_settings
 from .database import check_database_connection, engine, init_db
+from .middleware import SecurityHeadersMiddleware, SlidingWindowRateLimiter
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.1.0")
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(SlidingWindowRateLimiter)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_origin],

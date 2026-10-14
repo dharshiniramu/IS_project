@@ -34,4 +34,35 @@ textarea { resize: vertical; }
 .status { margin-top: 1rem; border-radius: 8px; padding: .8rem .9rem; font-size: .9rem; }
 .status.success { background: rgba(214,243,107,.12); color: #dff5a6; }
 .status.error { background: rgba(255,88,88,.12); color: #ffb1b1; }
+.protection-panel { display: flex; flex-direction: column; gap: 1rem; margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid #2a3a31; }
+.protection-panel h3 { margin: 0; font-size: 1.15rem; }
+.evidence-tool { display: flex; flex-direction: column; gap: .65rem; padding: 1rem; background: #0f1713; border: 1px solid #2d3d35; border-radius: 8px; }
+.evidence-hash { color: #82998a; font-size: .75rem; overflow-wrap: anywhere; }
+.tool-actions, .artifact-row { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.artifact-row { justify-content: space-between; padding-top: .55rem; border-top: 1px solid #24342b; color: #9eaea2; font-size: .78rem; overflow-wrap: anywhere; }
+.tool-actions .secondary-button, .artifact-row .secondary-button { padding: .55rem .7rem; font-size: .78rem; }
+.admin-dashboard { width: min(900px, 100%); }
+.admin-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
+.admin-heading h2 { margin-top: 0; }
+.admin-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: .7rem; margin: 1.5rem 0 2rem; }
+.admin-stats div { display: flex; flex-direction: column; gap: .25rem; padding: 1rem; background: #0f1713; border: 1px solid #2d3d35; border-radius: 8px; }
+.admin-stats strong { color: #d6f36b; font-size: 1.6rem; }
+.admin-stats span { color: #9eaea2; font-size: .78rem; }
+.admin-dashboard h3 { margin: 1.6rem 0 .8rem; }
+.incident-row { display: flex; flex-direction: column; gap: .55rem; margin-bottom: .8rem; padding: 1rem; background: #0f1713; border: 1px solid #2d3d35; border-radius: 8px; }
+.incident-row-heading { display: flex; justify-content: space-between; gap: 1rem; align-items: center; }
+.incident-row h4 { margin: .2rem 0; color: #f4f7f2; }
+.incident-row p { margin: 0; color: #b7c5b9; line-height: 1.5; white-space: pre-wrap; }
+.status-badge { padding: .3rem .55rem; border-radius: 99px; background: rgba(214,243,107,.12); color: #dff5a6; font-size: .72rem; text-transform: capitalize; }
+.status-badge.resolved { background: rgba(111, 214, 151, .14); color: #9ff0bd; }
+.status-badge.rejected { background: rgba(255,88,88,.12); color: #ffb1b1; }
+.audit-list { display: flex; flex-direction: column; border: 1px solid #2d3d35; border-radius: 8px; overflow: hidden; }
+.audit-row { display: grid; grid-template-columns: 1.5fr 1fr 1.2fr; gap: .8rem; padding: .75rem; background: #0f1713; border-bottom: 1px solid #24342b; color: #b7c5b9; font-size: .78rem; }
+.audit-row:last-child { border-bottom: 0; }
+.audit-row strong { color: #dfe9e0; }
+.evidence-investigation { display: flex; flex-direction: column; gap: .55rem; margin-top: .5rem; padding: .8rem; border: 1px solid #2d3d35; border-radius: 8px; background: #162119; }
+.investigation-file { display: flex; flex-direction: column; gap: .5rem; padding-top: .6rem; border-top: 1px solid #24342b; color: #b7c5b9; font-size: .8rem; }
+.investigation-file:first-of-type { border-top: 0; padding-top: 0; }
+.artifact-list { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; color: #82998a; font-size: .75rem; }
+.artifact-list .secondary-button { padding: .45rem .6rem; font-size: .72rem; }
 @media (max-width: 760px) { .site-shell { padding-inline: 1.2rem; } .hero { margin-top: 5rem; } .feature-grid { grid-template-columns: 1fr; } .signed-in { display: none; } }

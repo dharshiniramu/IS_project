@@ -32,6 +32,15 @@ class TokenResponse(BaseModel):
     user: UserResponse
 
 
+class EvidenceShareSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    share_number: int
+    stored_filename: str
+    sha256_hash: str
+
+
 class EvidenceResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -41,6 +50,10 @@ class EvidenceResponse(BaseModel):
     size_bytes: int
     sha256_hash: str
     created_at: datetime
+    shares: list[EvidenceShareSummary] = Field(default_factory=list)
+    stego_artifacts: list["StegoArtifactResponse"] = Field(default_factory=list)
+    text_stego_artifacts: list["TextStegoArtifactResponse"] = Field(default_factory=list)
+    audio_stego_artifacts: list["AudioStegoArtifactResponse"] = Field(default_factory=list)
 
 
 class EvidenceShareResponse(BaseModel):
@@ -60,6 +73,14 @@ class StegoArtifactResponse(BaseModel):
     sha256_hash: str
     message_size_bytes: int
     created_at: datetime
+
+
+class TextStegoArtifactResponse(StegoArtifactResponse):
+    pass
+
+
+class AudioStegoArtifactResponse(StegoArtifactResponse):
+    pass
 
 
 class IncidentResponse(BaseModel):

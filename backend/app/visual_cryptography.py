@@ -28,3 +28,27 @@ def create_visual_shares(image_bytes: bytes) -> tuple[bytes, bytes]:
     share_one.save(output_one, format="PNG")
     share_two.save(output_two, format="PNG")
     return output_one.getvalue(), output_two.getvalue()
+
+
+def reconstruct_visual_shares(share_one_bytes: bytes, share_two_bytes: bytes) -> bytes:
+    first = Image.open(BytesIO(share_one_bytes)).convert("L")
+    second = Image.open(BytesIO(share_two_bytes)).convert("L")
+    if first.size != second.size or first.width % 2 or first.height % 2:
+        raise ValueError("Visual shares must have matching even dimensions")
+    output = Image.new("L", (first.width // 2, first.height // 2), 255)
+    first_pixels = first.load()
+    second_pixels = second.load()
+    output_pixels = output.load()
+    for y in range(output.height):
+        for x in range(output.width):
+            dark_pixels = 0
+            for offset_y in range(2):
+                for offset_x in range(2):
+                    if first_pixels[x * 2 + offset_x, y * 2 + offset_y] < 128:
+                        dark_pixels += 1
+                    if second_pixels[x * 2 + offset_x, y * 2 + offset_y] < 128:
+                        dark_pixels += 1
+            output_pixels[x, y] = 0 if dark_pixels >= 4 else 255
+    result = BytesIO()
+    output.save(result, format="PNG")
+    return result.getvalue()
